@@ -1,0 +1,160 @@
+
+kernel void split 			( 
+							 global int  * restrict input, 
+							 global int  * restrict input_app,
+							 global int2 * restrict delimiters,
+							 global int  * restrict pivots
+
+							) {
+							   
+	int idx=get_global_id(0);
+	int start = -1;
+	int end= -1;
+	int i = 0;
+
+
+	//Determinazione del sotto-array da ordinare
+	while ( delimiters[i].x != (-1) && delimiters[i].y != (-1) ) {
+		if (idx >= delimiters[i].x && idx <= delimiters[i].y) {
+			start = delimiters[i].x;
+			end = delimiters[i].y;
+			break;
+		}
+		i++;
+	}
+
+	if (start == -1 || end==-1) return;
+
+	int pivot_val = input [end];
+	int problem_idx = i;
+	int behind_elements = 0;
+	int forward_elements = 0;
+	int n_ele_sequence = end-start+1;
+
+	//Fase di Conteggio
+	if (input[idx] <= pivot_val) {
+
+		for (i=start;i< idx;i++) {
+			if (input[i] <= pivot_val ) behind_elements++;	
+		}		
+
+	}else{
+
+		for (i=idx+1;i<end;i++) {
+			if (input[i] > pivot_val ) forward_elements++;	
+		}		
+
+	} 
+
+	//Fase di Scrittura
+	if (input[idx] <= pivot_val) {
+		
+		input_app[start+behind_elements] = input[idx];
+
+		if ( idx == end ) {
+			pivots[ problem_idx ] = start+behind_elements;
+		}
+
+	}else{
+
+		int index =  ( n_ele_sequence - (forward_elements+1) );
+		
+		if ( start>0 ) {
+			index+= start;
+		} 
+
+		input_app[ index ] = input[idx];
+
+	}
+
+}
+
+kernel void parallel_quick ( 
+							 global int  * restrict input, 
+							 global int  * restrict input_app,
+							 global int2 * restrict delimiters,
+							 global int2 * restrict app
+
+						   ) {
+							   
+	int local_idx = get_local_id(0);
+	int start = delimiters[get_group_id(0)].x;
+	int end= delimiters[get_group_id(0)].y;
+
+	if ( (start+local_idx) > end )  return;
+
+	int problem_idx = get_group_id(0);
+	int pivot_val = input [end];
+	int pivot_idx = -1;
+	int behind_elements = 0;
+	int forward_elements = 0;
+	int n_ele_sequence = end-start+1;
+
+
+	//Fase di Conteggio
+	if (input[start + local_idx] <= pivot_val) {
+
+		for (int i=start;i< start + local_idx;i++) {
+			if (input[i] <= pivot_val ) behind_elements++;	
+		}		
+
+	}else{
+
+		for (int i= (start + local_idx) + 1;i<end;i++) {
+			if (input[i] > pivot_val ) forward_elements++;	
+		}		
+
+	}
+
+
+	//Fase di Scrittura
+	if (input[ start + local_idx] <= pivot_val) {
+		
+		input_app[ start + behind_elements ] = input[ start + local_idx ];
+
+		if ( start + local_idx == end ) {
+			pivot_idx = start+behind_elements;
+		}
+
+	}else{
+
+		int index =  ( n_ele_sequence - (forward_elements+1) );
+		
+		if ( start>0 ) {
+			index+= start;
+		} 
+
+		input_app[ index ] = input[ start + local_idx ];
+
+	}
+
+	barrier (CLK_GLOBAL_MEM_FENCE);
+
+	if (start+local_idx == end) {
+
+		//Fase di Aggiustamento del Vettore delimiters
+		int is_left_none = 0;
+		int is_right_none = 0;
+
+		if (pivot_idx-1 <= start) {
+			app[problem_idx*2] = (int2) (-1,-1);
+			is_left_none=1;
+		}
+
+		if (pivot_idx+1 >= end) {
+			app[(problem_idx*2)+1] = (int2) (-1,-1);
+			is_right_none=1; 
+		}
+
+		if (is_left_none==0) {
+			app[problem_idx*2] = (int2) (start,pivot_idx-1);
+		}
+
+		if (is_right_none==0) {
+			app[(problem_idx*2)+1] = (int2) (pivot_idx+1,end);
+		}
+
+
+	}
+
+}

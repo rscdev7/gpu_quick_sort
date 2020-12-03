@@ -1,0 +1,318 @@
+#define QUART_SIZE 4
+
+kernel void split 			( 
+							 global int  * restrict input, 
+							 global int  * restrict smaller_pivot,
+							 global int  * restrict greater_pivot,
+							 global int2 * restrict delimiters
+
+							) {
+							   
+	int idx=get_global_id(0);
+	int start = -1;
+	int end= -1;
+	int i = 0;
+
+
+	//Determinazione del sotto-array da ordinare
+	while ( delimiters[i].x != (-1) && delimiters[i].y != (-1) ) {
+		if (idx >= delimiters[i].x && idx <= delimiters[i].y) {
+			start = delimiters[i].x;
+			end = delimiters[i].y;
+			break;
+		}
+		i++;
+	}
+
+	if (start == -1 || end==-1) return;
+
+	if (idx==end) return; 
+
+	int pivot_val = input [end];
+
+	
+	if (input[idx] <= pivot_val) {
+
+		//Caso in cui il valore in esame e' piu' piccolo o uguale a pivot
+		smaller_pivot[idx] = input[idx]; 
+	}else{
+
+		//Caso in cui il valore in esame e' piu' grande del pivot
+		greater_pivot[idx] = input[idx];
+	}
+
+}
+
+kernel void fill 	( 
+						global int  * restrict  input,
+						global int  * restrict  smaller_pivot,
+						global int  * restrict  greater_pivot,
+						global int2 * restrict  delimiters,
+						global int2 * restrict  app
+					){
+
+	int idx = get_global_id(0);
+	int problem_idx = idx;
+
+	int start = delimiters[idx].x;
+	int end = delimiters[idx].y;
+
+		
+	//Fase di aggiornamento del vettore di input con i dati aggiornati
+	int index = start;
+
+	for (int z=start; z < end; z++ ) {
+		if (smaller_pivot[z] != (-1)) {
+			input[index] = smaller_pivot[z];
+			smaller_pivot[z] = -1;
+			index++;
+		}
+	}
+
+	int pivot_idx = index;
+	input[pivot_idx] = input[end];
+	index++;
+
+	for (int z=start; z < end; z++) {
+		if (greater_pivot[z] != (-1)) {
+			input[index] = greater_pivot[z];
+			greater_pivot[z] = -1;
+			index++;
+		}
+	}
+
+	//Fase di Aggiustamento del Vettore delimiters
+	int is_left_none = 0;
+	int is_right_none = 0;
+
+	if (pivot_idx-1 <= start) {
+		app[problem_idx*2] = (int2) (-1,-1);
+		is_left_none=1;
+	}
+
+	if (pivot_idx+1 >= end) {
+		app[(problem_idx*2)+1] = (int2) (-1,-1);
+		is_right_none=1; 
+	}
+
+	if (is_left_none==0) {
+		app[problem_idx*2] = (int2) (start,pivot_idx-1);
+	}
+
+	if (is_right_none==0) {
+		app[(problem_idx*2)+1] = (int2) (pivot_idx+1,end);
+	}
+
+}
+
+kernel void parallel_quick ( 
+							 global int  * restrict input, 
+							 global int  * restrict smaller_pivot,
+							 global int  * restrict greater_pivot,
+							 global int2 * restrict delimiters,
+							 global int2 * restrict app,
+							 int max_work_dim
+
+						   ) {
+							   
+	int local_idx = get_local_id(0);
+	int start = delimiters[get_group_id(0)].x;
+	int end= delimiters[get_group_id(0)].y;
+
+	int real_sott_dim = (end-start)+1;
+	
+	//Calcolo il numero di quartine per il Work-Group
+	int num_quarts = (  ((real_sott_dim + 4 - 1)/4)*4  ) / 4;
+
+	if (local_idx >= num_quarts) return;
+
+	int resto = real_sott_dim % 4;
+
+	int last_quart = num_quarts-1;
+
+	
+
+	int problem_idx = get_group_id(0);
+	int pivot_val = input [end];
+	int e[QUART_SIZE];
+
+	if (resto!=0 && local_idx == last_quart) {
+
+		for (int c=0;c<resto;c++) {
+			int tmp = input[start+ ( (4*local_idx) +c ) ];
+
+			if (tmp<= pivot_val) {
+				smaller_pivot[start+ ( (4*local_idx) +c ) ] = tmp;
+ 			}else{
+				greater_pivot[start+ ( (4*local_idx) +c ) ] = tmp;
+			}
+		}
+
+
+	}else{
+		e[0] = input[start+ ( (4*local_idx) +0 )];
+		e[1] = input[start+ ( (4*local_idx) +1 )];
+		e[2] = input[start+ ( (4*local_idx) +2 )];
+		e[3] = input[start+ ( (4*local_idx) +3 )];
+
+		if (e[0] <= pivot_val) {
+			smaller_pivot[start + ( (4*local_idx) +0) ] = e[0]; 
+		}else{
+			greater_pivot[start + ( (4*local_idx) +0) ] = e[0]; 
+		}
+
+		if (e[1] <= pivot_val) {
+			smaller_pivot[start + ( (4*local_idx) +1) ] = e[1]; 
+		}else{
+			greater_pivot[start + ( (4*local_idx) +1) ] = e[1]; 
+		}
+
+		if (e[2] <= pivot_val) {
+			smaller_pivot[start + ( (4*local_idx) +2) ] = e[2]; 
+		}else{
+			greater_pivot[start + ( (4*local_idx) +2) ] = e[2]; 
+		}
+
+		if (e[3] <= pivot_val) {
+			smaller_pivot[start + ( (4*local_idx) +3) ] = e[3]; 
+		}else{
+			greater_pivot[start + ( (4*local_idx) +3) ] = e[3]; 
+		}
+
+	}
+
+
+	barrier (CLK_GLOBAL_MEM_FENCE);
+
+	if (local_idx == 0) {
+		
+		//Fase di aggiornamento del vettore di input con i dati aggiornati
+		int index = start + local_idx;
+
+		for (int z=start+local_idx; z < end; z+=4 ) {
+
+			if (smaller_pivot[z] != (-1)) {
+				input[index] = smaller_pivot[z];
+				smaller_pivot[z] = -1;
+				index++;
+			}
+
+			if (z+1==end) break;
+
+			if (smaller_pivot[z+1] != (-1)) {
+				input[index] = smaller_pivot[z+1];
+				smaller_pivot[z+1] = -1;
+				index++;
+			}
+
+			if (z+2==end) break;
+
+			if (smaller_pivot[z+2] != (-1)) {
+				input[index] = smaller_pivot[z+2];
+				smaller_pivot[z+2] = -1;
+				index++;
+			}
+
+			if (z+3==end) break;
+
+			if (smaller_pivot[z+3] != (-1)) {
+				input[index] = smaller_pivot[z+3];
+				smaller_pivot[z+3] = -1;
+				index++;
+			}
+
+			if (z+4 > end) {
+
+				int k=1;
+				while (z+k<end) {
+
+					if (smaller_pivot[z+k] != (-1)) {
+						input[index] = smaller_pivot[z+k];
+						smaller_pivot[z+k] = -1;
+						index++;
+					}
+					k++;
+				}
+			}
+
+		}
+
+		int pivot_idx = index;
+		input[pivot_idx] = input[end];
+		index++;
+
+		for (int z=start+local_idx; z < end; z+=4 ) {
+
+			if (greater_pivot[z] != (-1)) {
+				input[index] = greater_pivot[z];
+				greater_pivot[z] = -1;
+				index++;
+			}
+
+			if (z+1==end) break;
+
+			if (greater_pivot[z+1] != (-1)) {
+				input[index] = greater_pivot[z+1];
+				greater_pivot[z+1] = -1;
+				index++;
+			}
+
+			if (z+2==end) break;
+
+			if (greater_pivot[z+2] != (-1)) {
+				input[index] = greater_pivot[z+2];
+				greater_pivot[z+2] = -1;
+				index++;
+			}
+
+			if (z+3==end) break;
+
+			if (greater_pivot[z+3] != (-1)) {
+				input[index] = greater_pivot[z+3];
+				greater_pivot[z+3] = -1;
+				index++;
+			}
+
+			if (z+4 > end) {
+
+				int k=1;
+				while (z+k<end) {
+
+					if (greater_pivot[z+k] != (-1)) {
+						input[index] = greater_pivot[z+k];
+						greater_pivot[z+k] = -1;
+						index++;
+					}
+					k++;
+				}
+			}
+
+		}
+
+
+		//Fase di Aggiustamento del Vettore delimiters
+		int is_left_none = 0;
+		int is_right_none = 0;
+
+		if (pivot_idx-1 <= start) {
+			app[problem_idx*2] = (int2) (-1,-1);
+			is_left_none=1;
+		}
+
+		if (pivot_idx+1 >= end) {
+			app[(problem_idx*2)+1] = (int2) (-1,-1);
+			is_right_none=1; 
+		}
+
+		if (is_left_none==0) {
+			app[problem_idx*2] = (int2) (start,pivot_idx-1);
+		}
+
+		if (is_right_none==0) {
+			app[(problem_idx*2)+1] = (int2) (pivot_idx+1,end);
+		}
+
+
+	}
+
+}

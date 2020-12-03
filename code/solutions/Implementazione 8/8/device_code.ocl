@@ -1,0 +1,184 @@
+
+kernel void parallel_quick ( 
+							 global int  * restrict input, 
+							 global int2 * restrict delimiters,
+							 global int2 * restrict app,
+							 local  int  * restrict cache,
+							 local  int  * restrict scan_cache,
+							 local  int  * restrict ex_index
+
+						   ) {
+							   
+	int local_idx=get_local_id(0);
+
+	int start = delimiters[get_group_id(0)].x;
+	int end = delimiters[get_group_id(0)].y;
+	int pivot_val = input[end];
+	int problem_size = end-start;
+
+	int sliding_size = get_local_size(0);
+	if (sliding_size>problem_size) {
+		sliding_size = problem_size;
+	}
+
+	int n_laps = problem_size/sliding_size;
+	int resto = problem_size%sliding_size;
+
+	int idx_lettura=0;
+	int acc=0;
+	int tmp=0;
+	int i=0;
+
+	while (i<n_laps) {
+
+		if (local_idx<sliding_size) {
+
+			if (i==0 && local_idx==0) {
+				ex_index[0]=-1;
+			}else if (local_idx==0) {
+				ex_index[0]+=scan_cache[sliding_size-1];	
+			}
+
+			idx_lettura = start + (sliding_size*i) + local_idx;
+
+			if ( input[idx_lettura] <= pivot_val ) {
+				cache[local_idx] = 1;
+			}else{
+				cache[local_idx] = 0;
+			}
+
+			barrier (CLK_GLOBAL_MEM_FENCE);
+
+			acc=0;
+			for (int z=0;z<=local_idx;z++) {
+				acc+=cache[z];
+			}
+
+			scan_cache[local_idx] = acc;
+
+			barrier (CLK_GLOBAL_MEM_FENCE);
+
+			if (local_idx==0) {
+
+				for (int z=0;z<sliding_size;z++) {
+					
+					if (cache[z] == 1) {
+						int idx_lettura_1 = start + (sliding_size*i) + z;
+						int idx_lettura_2 = start+ ex_index[0] + scan_cache[z];
+
+						tmp = input[idx_lettura_2];
+						input[idx_lettura_2] = input [idx_lettura_1];
+						input[idx_lettura_1] = tmp;
+					}
+					
+				}
+
+			}
+
+			barrier (CLK_GLOBAL_MEM_FENCE);
+		}
+		i++;
+	}
+
+	if (resto>0) {
+
+		if (local_idx<sliding_size) {
+
+			if (local_idx==0) {
+				ex_index[0]+=scan_cache[sliding_size-1];	
+			}
+
+			idx_lettura = start + (sliding_size*i) + local_idx;
+
+			if (idx_lettura<end) {
+
+				if ( input[idx_lettura] <= pivot_val ) {
+					cache[local_idx] = 1;
+				}else{
+					cache[local_idx] = 0;
+				}
+
+			}
+			
+
+			barrier (CLK_GLOBAL_MEM_FENCE);
+
+			if (idx_lettura<end) {
+				acc=0;
+				for (int z=0;z<=local_idx;z++) {
+					acc+=cache[z];
+				}
+
+				scan_cache[local_idx] = acc;
+
+			}
+			
+
+			barrier (CLK_GLOBAL_MEM_FENCE);
+
+			if (local_idx==0) {
+
+				for (int z=0;z<resto;z++) {
+					
+					if (cache[z] == 1) {
+						int idx_lettura_1 = start + (sliding_size*i) + z;
+						int idx_lettura_2 = start+ ex_index[0] + scan_cache[z];
+
+						tmp = input[idx_lettura_2];
+						input[idx_lettura_2] = input [idx_lettura_1];
+						input[idx_lettura_1] = tmp;
+					}
+					
+				}
+
+			}
+
+		}
+
+	}
+
+
+	if (local_idx==0) {
+
+		if (resto>0) {
+			ex_index[0]+=scan_cache[resto-1] + 1;
+		}else{
+			ex_index[0]+=scan_cache[sliding_size-1] + 1;	
+		}
+
+		int pivot_idx = start+ ex_index[0];
+		tmp = input [pivot_idx];
+		input[pivot_idx] = pivot_val;
+		input[end] = tmp;
+
+
+		//Fase di Aggiustamento del Vettore delimiters
+		int is_left_none = 0;
+		int is_right_none = 0;
+
+		if (pivot_idx-1 <= start) {
+			app[get_group_id(0)*2] = (int2) (-1,-1);
+			is_left_none=1;
+		}
+
+		if (pivot_idx+1 >= end) {
+			app[(get_group_id(0)*2)+1] = (int2) (-1,-1);
+			is_right_none=1; 
+		}
+
+		if (is_left_none==0) {
+			app[get_group_id(0)*2] = (int2) (start,pivot_idx-1);
+		}
+
+		if (is_right_none==0) {
+			app[(get_group_id(0)*2)+1] = (int2) (pivot_idx+1,end);
+		}
+
+	}
+	
+
+	
+
+	
+
+}

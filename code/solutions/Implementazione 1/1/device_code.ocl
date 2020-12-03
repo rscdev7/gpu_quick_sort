@@ -1,0 +1,67 @@
+//Kernel che effettua la partition dei Quick-Sort
+kernel void parallel_quick ( 
+							 global int  * restrict input, 
+							 global int2 * restrict delimiters,
+							 global int2 * restrict app
+
+						   ) {
+
+	//Ogni Work-Item preleva il proprio indice nella griglia di lancio					   
+	int idx=get_global_id(0);
+
+	//Ogni Work-Item "capisce" in che sotto-problema si trova
+	int start = delimiters[idx].x;
+	int end = delimiters[idx].y;
+
+	//Fase di Partition
+	int pivot_val = input[end];
+	int i = start-1;
+	int tmp=0;
+
+	//Ciclo sulla lunghezza del sottoproblema
+	for (int j=start;j<end;j++) {
+			//Se l'elemento in esame è più piccolo del pivot
+			//Segue che lo scambio con l'elemento i-esimo
+	        if (input[j] <= pivot_val) {
+	                i=i+1;
+	                tmp=input[i];
+	                input[i]=input[j];
+	                input[j]=tmp;
+	        }
+	}
+
+	//Scambio il Pivot con "la testa" della lista dei maggiori del pivot
+	tmp=input[i+1];
+	input[i+1]=input[end];
+	input[end]=tmp;
+
+	pivot_val=i+1;
+
+	//Fase di Aggiustamento del Vettore delimiters, la scrittura viene fatta sul buffer app
+	//anzichè su delimiters per motivi di concorrenza fra i Work-Item
+	int is_left_none = 0;
+	int is_right_none = 0;
+
+	//Caso in cui il Pivot si trova al secondo o al primo posto del sotto-problema
+	if (pivot_val-1 <= start) {
+		app[idx*2] = (int2) (-1,-1);
+		is_left_none=1;
+	}
+
+	//Caso in cui il Pivot si trova al penultimo o all'ultimo posto del sotto-problema
+	if (pivot_val+1 >= end) {
+		app[(idx*2)+1] = (int2) (-1,-1);
+		is_right_none=1; 
+	}
+
+	//Caso in cui il pivot non si trova all'inizio dell'array
+	if (is_left_none==0) {
+		app[idx*2] = (int2) (start,pivot_val-1);
+	}
+
+	//Caso in cui il pivot non si trova alla fine dell'array
+	if (is_right_none==0) {
+		app[(idx*2)+1] = (int2) (pivot_val+1,end);
+	}
+
+}

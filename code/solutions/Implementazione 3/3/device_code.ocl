@@ -1,0 +1,214 @@
+
+kernel void split 			( 
+							 global int  * restrict input, 
+							 global int  * restrict smaller_pivot,
+							 global int  * restrict greater_pivot,
+							 global int2 * restrict delimiters,
+							 global int  * restrict map
+
+							) {
+	//Ogni work-item preleva il suo indice globale				   
+	int idx=get_global_id(0);
+
+	//Variabili che indicano rispettivamente l'inizio, la fine e l'indice del sottoproblema
+	//nell'array delimiters
+	int start = -1;
+	int end= -1;
+	int i = 0;
+
+	//Variabile che rappresenta il valore associato al Work-Item
+	int value = map[idx];
+
+
+	//Determinazione del sotto-array da ordinare
+	while ( delimiters[i].x != (-1) && delimiters[i].y != (-1) ) {
+		if (value >= delimiters[i].x && value <= delimiters[i].y) {
+			start = delimiters[i].x;
+			end = delimiters[i].y;
+			break;
+		}
+		i++;
+	}
+
+	//L'ultimo Work-Item esce
+	if (value==end) return; 
+
+	int pivot_val = input [end];
+
+	
+	if (input[value] <= pivot_val) {
+
+		//Caso in cui il valore in esame e' piu' piccolo o uguale a pivot
+		smaller_pivot[value] = input[value]; 
+	}else{
+
+		//Caso in cui il valore in esame e' piu' grande del pivot
+		greater_pivot[value] = input[value];
+	}
+
+}
+
+kernel void fill 	( 
+						global int  * restrict  input,
+						global int  * restrict  smaller_pivot,
+						global int  * restrict  greater_pivot,
+						global int2 * restrict  delimiters,
+						global int2 * restrict  app
+					){
+
+	//Ogni work-item preleva il suo indice globale
+	int idx = get_global_id(0);
+
+	//Variabili che indicano rispettivamente l'inizio, la fine e l'indice del sottoproblema
+	//nell'array delimiters
+	int problem_idx = idx;
+	int start = delimiters[idx].x;
+	int end = delimiters[idx].y;
+
+		
+	//Fase di aggiornamento del vettore di input con i dati aggiornati
+	int index = start;
+
+	for (int z=start; z < end; z++ ) {
+		if (smaller_pivot[z] != (-1)) {
+			input[index] = smaller_pivot[z];
+			smaller_pivot[z] = -1;
+			index++;
+		}
+	}
+
+	int pivot_idx = index;
+	input[pivot_idx] = input[end];
+	index++;
+
+	for (int z=start; z < end; z++) {
+		if (greater_pivot[z] != (-1)) {
+			input[index] = greater_pivot[z];
+			greater_pivot[z] = -1;
+			index++;
+		}
+	}
+
+	//Fase di Aggiustamento del Vettore delimiters
+	int is_left_none = 0;
+	int is_right_none = 0;
+
+	//Caso in cui il pivot è al primo o al secondo posto del sottoproblema
+	if (pivot_idx-1 <= start) {
+		app[problem_idx*2] = (int2) (-1,-1);
+		is_left_none=1;
+	}
+
+	//Caso in cui il pivot è all'ultimo o al penultimo posto del sottoproblema
+	if (pivot_idx+1 >= end) {
+		app[(problem_idx*2)+1] = (int2) (-1,-1);
+		is_right_none=1; 
+	}
+
+	//Caso in cui il pivot NON è al primo o al secondo posto del sottoproblema
+	if (is_left_none==0) {
+		app[problem_idx*2] = (int2) (start,pivot_idx-1);
+	}
+
+	//Caso in cui il pivot NON è all'ultimo o al penultimo posto del sottoproblema
+	if (is_right_none==0) {
+		app[(problem_idx*2)+1] = (int2) (pivot_idx+1,end);
+	}
+
+}
+
+kernel void parallel_quick ( 
+							 global int  * restrict input, 
+							 global int  * restrict smaller_pivot,
+							 global int  * restrict greater_pivot,
+							 global int2 * restrict delimiters,
+							 global int2 * restrict app
+
+						   ) {
+	//Ogni Work-item preleva il suo indice locale assieme 
+	//all'inizio e alla fine del suo sotto-problema			   
+	int local_idx = get_local_id(0);
+	int start = delimiters[get_group_id(0)].x;
+	int end= delimiters[get_group_id(0)].y;
+
+	//Utilizzo solo i Work-Item che mi servono
+	if ( (start+local_idx) >= end )  return;
+
+	//Prelevo l'indice globale assieme all'indice del sottoproblema
+	int idx=get_global_id(0);
+	int problem_idx = get_group_id(0);
+
+	int pivot_val = input [end];
+
+	//Valore assegnato al Work-Item
+	int value = start+local_idx;
+
+
+	if (input[value] <= pivot_val) {
+
+		//Caso in cui il valore in esame e' piu' piccolo o uguale a pivot
+		smaller_pivot[value] = input[value]; 
+	}else{
+
+		//Caso in cui il valore in esame e' piu' grande del pivot
+		greater_pivot[value] = input[value];
+	}
+
+	barrier (CLK_GLOBAL_MEM_FENCE);
+
+	//Se sono il primo Work-Item del Work-Group
+	if (local_idx == 0) {
+		
+		//Fase di aggiornamento del vettore di input con i dati aggiornati
+		int index = start + local_idx;
+
+		for (int z=start+local_idx; z < end; z++ ) {
+			if (smaller_pivot[z] != (-1)) {
+				input[index] = smaller_pivot[z];
+				smaller_pivot[z] = -1;
+				index++;
+			}
+		}
+
+		int pivot_idx = index;
+		input[pivot_idx] = input[end];
+		index++;
+
+		for (int z=start+local_idx; z < end; z++) {
+			if (greater_pivot[z] != (-1)) {
+				input[index] = greater_pivot[z];
+				greater_pivot[z] = -1;
+				index++;
+			}
+		}
+
+		//Fase di Aggiustamento del Vettore delimiters
+		int is_left_none = 0;
+		int is_right_none = 0;
+
+		//Caso in cui il pivot è al primo o al secondo posto del sottoproblema
+		if (pivot_idx-1 <= start) {
+			app[problem_idx*2] = (int2) (-1,-1);
+			is_left_none=1;
+		}
+
+		//Caso in cui il pivot è all'ultimo o al penultimo posto del sottoproblema
+		if (pivot_idx+1 >= end) {
+			app[(problem_idx*2)+1] = (int2) (-1,-1);
+			is_right_none=1; 
+		}
+
+		//Caso in cui il pivot NON è al primo o al secondo posto del sottoproblema
+		if (is_left_none==0) {
+			app[problem_idx*2] = (int2) (start,pivot_idx-1);
+		}
+
+		//Caso in cui il pivot NON è all'ultimo o al penultimo posto del sottoproblema
+		if (is_right_none==0) {
+			app[(problem_idx*2)+1] = (int2) (pivot_idx+1,end);
+		}
+
+
+	}
+
+}

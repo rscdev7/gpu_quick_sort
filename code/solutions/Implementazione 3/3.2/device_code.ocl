@@ -1,0 +1,189 @@
+
+kernel void split 			( 
+							 global int  * restrict input, 
+							 global int  * restrict smaller_pivot,
+							 global int  * restrict greater_pivot,
+							 global int2 * restrict delimiters,
+							 global int  * restrict map
+
+							) {
+							   
+	int idx=get_global_id(0);
+	int start = -1;
+	int end= -1;
+	int i = 0;
+	int value=map[idx];
+
+
+	//Determinazione del sotto-array da ordinare
+	while ( delimiters[i].x != (-1) && delimiters[i].y != (-1) ) {
+		if (value >= delimiters[i].x && value <= delimiters[i].y) {
+			start = delimiters[i].x;
+			end = delimiters[i].y;
+			break;
+		}
+		i++;
+	}
+
+	if (value==end) return; 
+
+	int pivot_val = input [end];
+
+	
+	if (input[value] <= pivot_val) {
+
+		//Caso in cui il valore in esame e' piu' piccolo o uguale a pivot
+		smaller_pivot[value] = input[value]; 
+	}else{
+
+		//Caso in cui il valore in esame e' piu' grande del pivot
+		greater_pivot[value] = input[value];
+	}
+
+}
+
+kernel void fill 	( 
+						global int  * restrict  input,
+						global int  * restrict  smaller_pivot,
+						global int  * restrict  greater_pivot,
+						global int2 * restrict  delimiters,
+						global int2 * restrict  app
+					){
+
+	int idx = get_global_id(0);
+	int problem_idx = idx;
+
+	int start = delimiters[idx].x;
+	int end = delimiters[idx].y;
+
+		
+	//Fase di aggiornamento del vettore di input con i dati aggiornati
+	int index = start;
+
+	for (int z=start; z < end; z++ ) {
+		if (smaller_pivot[z] != (-1)) {
+			input[index] = smaller_pivot[z];
+			smaller_pivot[z] = -1;
+			index++;
+		}
+	}
+
+	int pivot_idx = index;
+	input[pivot_idx] = input[end];
+	index++;
+
+	for (int z=start; z < end; z++) {
+		if (greater_pivot[z] != (-1)) {
+			input[index] = greater_pivot[z];
+			greater_pivot[z] = -1;
+			index++;
+		}
+	}
+
+	//Fase di Aggiustamento del Vettore delimiters
+	int is_left_none = 0;
+	int is_right_none = 0;
+
+	if (pivot_idx-1 <= start) {
+		app[problem_idx*2] = (int2) (-1,-1);
+		is_left_none=1;
+	}
+
+	if (pivot_idx+1 >= end) {
+		app[(problem_idx*2)+1] = (int2) (-1,-1);
+		is_right_none=1; 
+	}
+
+	if (is_left_none==0) {
+		app[problem_idx*2] = (int2) (start,pivot_idx-1);
+	}
+
+	if (is_right_none==0) {
+		app[(problem_idx*2)+1] = (int2) (pivot_idx+1,end);
+	}
+
+}
+
+kernel void parallel_quick ( 
+							 global int  * restrict input, 
+							 global int2 * restrict delimiters,
+							 global int2 * restrict app,
+							 local int   * restrict cache_s,
+							 local int   * restrict cache_g 
+
+						   ) {
+							   
+	int local_idx = get_local_id(0);
+	int start = delimiters[get_group_id(0)].x;
+	int end= delimiters[get_group_id(0)].y;
+
+	if ( (start+local_idx) >= end )  return;
+
+	cache_s[local_idx] = -1;
+	cache_g [local_idx] = -1;
+
+	int problem_idx = get_group_id(0);
+	int pivot_val = input [end];
+
+
+	if (input[start+local_idx] <= pivot_val) {
+
+		//Caso in cui il valore in esame e' piu' piccolo o uguale a pivot
+		cache_s[local_idx] = input[start+local_idx]; 
+	}else{
+
+		//Caso in cui il valore in esame e' piu' grande del pivot
+		cache_g[local_idx] = input[start+local_idx];
+	}
+
+	barrier (CLK_GLOBAL_MEM_FENCE);
+
+	if (local_idx == 0) {
+		
+		//Fase di aggiornamento del vettore di input con i dati aggiornati
+		int index = start + local_idx;
+
+		for (int z=local_idx; z < (end-start); z++ ) {
+			if (cache_s[z] != (-1)) {
+				input[index] = cache_s[z];
+				index++;
+			}
+		}
+
+		int pivot_idx = index;
+		input[pivot_idx] = input[end];
+		index++;
+
+		for (int z=local_idx; z < (end-start); z++) {
+			if (cache_g[z] != (-1)) {
+				input[index] = cache_g[z];
+				index++;
+			}
+		}
+
+		//Fase di Aggiustamento del Vettore delimiters
+		int is_left_none = 0;
+		int is_right_none = 0;
+
+		if (pivot_idx-1 <= start) {
+			app[problem_idx*2] = (int2) (-1,-1);
+			is_left_none=1;
+		}
+
+		if (pivot_idx+1 >= end) {
+			app[(problem_idx*2)+1] = (int2) (-1,-1);
+			is_right_none=1; 
+		}
+
+		if (is_left_none==0) {
+			app[problem_idx*2] = (int2) (start,pivot_idx-1);
+		}
+
+		if (is_right_none==0) {
+			app[(problem_idx*2)+1] = (int2) (pivot_idx+1,end);
+		}
+
+
+	}
+
+}

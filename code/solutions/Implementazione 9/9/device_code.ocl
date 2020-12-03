@@ -1,0 +1,293 @@
+
+kernel void split 			( 
+							 global int  * restrict input, 
+							 global int  * restrict smaller_pivot,
+							 global int  * restrict greater_pivot,
+							 global int2 * restrict delimiters,
+							 global int  * restrict map
+
+							) {
+
+	//Ogni Work-Item preleva il suo global id				   
+	int idx=get_global_id(0);
+
+	//Variabili che conterranno rispettivamente: 
+	//l'inizio del sottoproblema, 
+	//la fine del sottoproblema, 
+	//e l'indice del sottoproblema nell'array delimtiers
+	int start = -1;
+	int end= -1;
+	int i = 0;
+	//Valore del Work-Item
+	int value= map[idx];
+
+
+	//Determinazione del sotto-array da ordinare da parte dei Work-Item
+	while ( delimiters[i].x != (-1) && delimiters[i].y != (-1) ) {
+		if (value >= delimiters[i].x && value <= delimiters[i].y) {
+			start = delimiters[i].x;
+			end = delimiters[i].y;
+			break;
+		}
+		i++;
+	}
+
+	//Il Work-Item che ha il Pivot come elemento esce
+	if (value==end) return; 
+
+	int pivot_val = input [end];
+
+	//Smistamento dei valori nelle due partizioni
+	if (input[value] <= pivot_val) {
+
+		//Caso in cui il valore in esame e' piu' piccolo o uguale a pivot
+		smaller_pivot[value] = input[value]; 
+		greater_pivot[value] = -1; 
+	}else{
+
+		//Caso in cui il valore in esame e' piu' grande del pivot
+		greater_pivot[value] = input[value];
+		smaller_pivot[value] = -1; 
+	}
+
+}
+
+kernel void fill 	( 
+						global int  * restrict  input,
+						global int  * restrict  smaller_pivot,
+						global int  * restrict  greater_pivot,
+						global int2 * restrict  delimiters,
+						global int2 * restrict  app,
+						local  int  * restrict  cache,
+						local  int  * restrict  scan_cache
+					){
+
+	int local_idx = get_local_id(0);
+	int problem_idx = get_group_id(0);
+	int start = delimiters[ problem_idx ].x;
+	int end = delimiters[ problem_idx ].y;
+	int problem_size = end - start;
+	int sliding_size = get_local_size(0);
+	int i = 0;
+	int dummy_start = start;
+	int n_writes = 0;
+	int wi_scan_acc = 0;
+	int idx_lettura_partition = 0;
+	int idx_lettura_input = 0;
+	int pivot_idx = 0;
+	int pivot_val = input[end];
+	
+
+	if (sliding_size>=problem_size) {
+		sliding_size=problem_size;
+	}
+
+	int n_laps = problem_size / sliding_size;
+	int hypothesis = n_laps * sliding_size;
+	int resto = (hypothesis==problem_size) ? 0 : (problem_size-hypothesis);
+
+
+	//Analizzo l'array Smaller_Pivot
+	while (i<n_laps) {
+
+		if ( local_idx < problem_size ) {
+			idx_lettura_partition = start + ( sliding_size * i ) + local_idx;
+
+			if ( smaller_pivot[idx_lettura_partition] == (-1)) {
+				cache[local_idx] = 1;
+			}else{
+				cache[local_idx] = 0;
+			}
+		}
+
+		barrier (CLK_GLOBAL_MEM_FENCE);
+
+		if ( local_idx < problem_size ) {
+			wi_scan_acc = 0;
+
+			for (int z=0; z <= local_idx; z++) {
+				wi_scan_acc += cache[z];
+			}
+
+			scan_cache[local_idx] = wi_scan_acc;
+		}
+		
+
+		barrier (CLK_GLOBAL_MEM_FENCE);
+
+		if (local_idx < problem_size && cache[local_idx] == 0) {
+			idx_lettura_input = ( dummy_start + local_idx - scan_cache[local_idx] ) ;
+			input [ idx_lettura_input ] = smaller_pivot [ idx_lettura_partition ]; 
+		}
+
+		n_writes = sliding_size - scan_cache[ sliding_size-1 ];
+
+		dummy_start += n_writes;
+
+		i++;
+
+	}
+
+	//Analizzo gli " eventuali superstiti " dell'array Smaller_Pivot
+	if (resto > 0 ) {
+
+		if (local_idx < resto) {
+			idx_lettura_partition = start + ( sliding_size * i ) + local_idx;
+
+			if ( smaller_pivot [ idx_lettura_partition ] == (-1) ) {
+				cache[local_idx] = 1;
+			}else{
+				cache[local_idx] = 0;
+			} 
+		}
+
+		barrier (CLK_GLOBAL_MEM_FENCE);
+
+		if (local_idx < resto) {
+			wi_scan_acc = 0;
+
+			for (int z=0; z <= local_idx ; z++) {
+				wi_scan_acc+=cache[z];
+			}
+
+			scan_cache[local_idx] = wi_scan_acc;
+		}
+
+		barrier(CLK_GLOBAL_MEM_FENCE);
+
+		if (local_idx < resto && cache[local_idx] == 0) {
+			idx_lettura_input = ( dummy_start + local_idx - scan_cache[local_idx] ) ;
+			input [ idx_lettura_input ] = smaller_pivot [ idx_lettura_partition ]; 
+		}
+
+		n_writes = resto - scan_cache[ resto-1 ];
+
+		dummy_start += n_writes;
+
+
+	}
+
+	if (local_idx == 0) {
+		pivot_idx = dummy_start;
+		input [ pivot_idx ] = pivot_val;
+		dummy_start++;
+	}else{
+		dummy_start++;
+	}
+
+	i = 0;
+
+	//Analizzo l'array Greater_Pivot
+	while (i<n_laps) {
+
+		if ( local_idx < problem_size ) {
+			idx_lettura_partition = start + ( sliding_size * i ) + local_idx;
+
+			if ( greater_pivot[idx_lettura_partition] == (-1)) {
+				cache[local_idx] = 1;
+			}else{
+				cache[local_idx] = 0;
+			}
+		}
+
+		barrier (CLK_GLOBAL_MEM_FENCE);
+
+		if ( local_idx < problem_size ) {
+			wi_scan_acc = 0;
+
+			for (int z=0; z <= local_idx; z++) {
+				wi_scan_acc += cache[z];
+			}
+
+			scan_cache[local_idx] = wi_scan_acc;
+		}
+		
+
+		barrier (CLK_GLOBAL_MEM_FENCE);
+
+		if (local_idx < problem_size && cache[local_idx] == 0) {
+			idx_lettura_input = ( dummy_start + local_idx - scan_cache[local_idx] ) ;
+			input [ idx_lettura_input ] = greater_pivot [ idx_lettura_partition ]; 
+		}
+
+		n_writes = sliding_size - scan_cache[ sliding_size-1 ];
+
+		dummy_start += n_writes;
+
+		i++;
+
+	}
+
+	//Analizzo gli " eventuali superstiti " dell'array Greater_Pivot
+	if (resto > 0 ) {
+
+		if (local_idx < resto) {
+			idx_lettura_partition = start + ( sliding_size * i ) + local_idx;
+
+			if ( greater_pivot [ idx_lettura_partition ] == (-1) ) {
+				cache[local_idx] = 1;
+			}else{
+				cache[local_idx] = 0;
+			} 
+		}
+
+		barrier (CLK_GLOBAL_MEM_FENCE);
+
+		if (local_idx < resto) {
+			wi_scan_acc = 0;
+
+			for (int z=0; z <= local_idx ; z++) {
+				wi_scan_acc+=cache[z];
+			}
+
+			scan_cache[local_idx] = wi_scan_acc;
+		}
+
+		barrier(CLK_GLOBAL_MEM_FENCE);
+
+		if (local_idx < resto && cache[local_idx] == 0) {
+			idx_lettura_input = ( dummy_start + local_idx - scan_cache[local_idx] ) ;
+			input [ idx_lettura_input ] = greater_pivot [ idx_lettura_partition ]; 
+		}
+
+		n_writes = resto - scan_cache[ resto-1 ];
+
+		dummy_start += n_writes;
+
+
+	}
+
+	 
+	//Fase di scrittura dei nuovi sottoproblemi
+	if (local_idx==0) {
+
+		//Fase di Aggiustamento del Vettore delimiters
+		int is_left_none = 0;
+		int is_right_none = 0;
+
+		//Caso in cui il pivot è il primo o il secondo elemento
+		if (pivot_idx-1 <= start) {
+			app[problem_idx*2] = (int2) (-1,-1);
+			is_left_none=1;
+		}
+
+		//Caso in cui il pivot è l'ultimo o il penultimo elemento
+		if (pivot_idx+1 >= end) {
+			app[(problem_idx*2)+1] = (int2) (-1,-1);
+			is_right_none=1; 
+		}
+
+		//Caso in cui il pivot NON è il primo o il secondo elemento
+		if (is_left_none==0) {
+			app[problem_idx*2] = (int2) (start,pivot_idx-1);
+		}
+
+		//Caso in cui il pivot NON l'ultimo o il penultimo elemento
+		if (is_right_none==0) {
+			app[(problem_idx*2)+1] = (int2) (pivot_idx+1,end);
+		}
+
+	}
+	
+
+}
